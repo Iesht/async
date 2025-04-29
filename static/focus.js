@@ -5,13 +5,13 @@ const API = {
     buhForms: "/api3/buh",
 };
 
-async function fetchWithCheck(url) {
+async function sendRequest(url) {
     try {
         const response = await fetch(url);
-        console.log("Fetch response for", url, response);
 
         if (!response.ok) {
-            alert(`Ошибка запроса ${url}: ${response.status} ${response.statusText}`);
+            alert(`${response.status}! Ошибка запроса ${url}: ${response.statusText}`);
+            console.warn("Ответ сервера:", response);
             return null;
         }
 
@@ -22,20 +22,19 @@ async function fetchWithCheck(url) {
     }
 }
 
-async function run() {
-    const orgOgrns = await fetchWithCheck(API.organizationList);
-    if (!orgOgrns) return;
 
+async function run() {
+    const orgOgrns = await sendRequest(API.organizationList);
+    if (!orgOgrns) return;
     const ogrns = orgOgrns.join(",");
 
-    const requisites = await fetchWithCheck(`${API.orgReqs}?ogrn=${ogrns}`);
-    if (!requisites) return;
+    const [requisites, analytics, buh] = await Promise.all([
+        sendRequest(`${API.orgReqs}?ogrn=${ogrns}`),
+        sendRequest(`${API.analytics}?ogrn=${ogrns}`),
+        sendRequest(`${API.buhForms}?ogrn=${ogrns}`)
+    ]);
 
-    const analytics = await fetchWithCheck(`${API.analytics}?ogrn=${ogrns}`);
-    if (!analytics) return;
-
-    const buh = await fetchWithCheck(`${API.buhForms}?ogrn=${ogrns}`);
-    if (!buh) return;
+    if (!requisites || !analytics || !buh) return;
 
     const orgsMap = reqsToMap(requisites);
     addInOrgsMap(orgsMap, analytics, "analytics");
@@ -44,6 +43,7 @@ async function run() {
 }
 
 run();
+
 
 function reqsToMap(requisites) {
     return requisites.reduce((acc, item) => {
@@ -54,9 +54,7 @@ function reqsToMap(requisites) {
 
 function addInOrgsMap(orgsMap, additionalInfo, key) {
     for (const item of additionalInfo) {
-        if (orgsMap[item.ogrn]) {
-            orgsMap[item.ogrn][key] = item[key];
-        }
+        orgsMap[item.ogrn][key] = item[key];
     }
 }
 
@@ -67,56 +65,77 @@ function render(organizationsInfo, organizationsOrder) {
     const template = document.getElementById("orgTemplate");
     const container = table.querySelector("tbody");
 
-    organizationsOrder.forEach((ogrn) => {
-        renderOrganization(organizationsInfo[ogrn], template, container);
+    organizationsOrder.forEach((item) => {
+        renderOrganization(organizationsInfo[item], template, container);
     });
 }
 
 function renderOrganization(orgInfo, template, container) {
     const clone = document.importNode(template.content, true);
-    const nameEl = clone.querySelector(".name");
-    const indebtednessEl = clone.querySelector(".indebtedness");
-    const moneyEl = clone.querySelector(".money");
-    const addressEl = clone.querySelector(".address");
+    const name = clone.querySelector(".name");
+    const indebtedness = clone.querySelector(".indebtedness");
+    const money = clone.querySelector(".money");
+    const address = clone.querySelector(".address");
 
-    nameEl.textContent =
-        (orgInfo.UL && orgInfo.UL.legalName && orgInfo.UL.legalName.short) || "";
+    name.textContent =
+        (orgInfo.UL && orgInfo.UL.legalName && orgInfo.UL.legalName.short) ||
+        "";
+    indebtedness.textContent = formatMoney(orgInfo.analytics.s1002 || 0);
 
-    indebtednessEl.textContent = formatMoney(orgInfo.analytics?.s1002 || 0);
-
-    const forms = orgInfo.buhForms || [];
-    const lastForm = forms[forms.length - 1];
-    if (lastForm?.year === 2017) {
-        moneyEl.textContent = formatMoney(
-            lastForm.form2?.[0]?.endValue || 0
+    if (
+        orgInfo.buhForms &&
+        orgInfo.buhForms.length &&
+        orgInfo.buhForms[orgInfo.buhForms.length - 1] &&
+        orgInfo.buhForms[orgInfo.buhForms.length - 1].year === 2017
+    ) {
+        money.textContent = formatMoney(
+            (orgInfo.buhForms[orgInfo.buhForms.length - 1].form2 &&
+                orgInfo.buhForms[orgInfo.buhForms.length - 1].form2[0] &&
+                orgInfo.buhForms[orgInfo.buhForms.length - 1].form2[0]
+                    .endValue) ||
+            0
         );
     } else {
-        moneyEl.textContent = "—";
+        money.textContent = "—";
     }
 
-    const addr = orgInfo.UL?.legalAddress?.parsedAddressRF;
-    addressEl.textContent = addr ? createAddress(addr) : "";
+    const addressFromServer = orgInfo.UL.legalAddress.parsedAddressRF;
+    address.textContent = createAddress(addressFromServer);
+
     container.appendChild(clone);
 }
 
 function formatMoney(money) {
-    let formatted = money.toFixed(2).replace(".", ",");
-    const rounded = Math.floor(money).toString();
-    for (let i = rounded.length - 3; i > 0; i -= 3) {
+    let formatted = money.toFixed(2);
+    formatted = formatted.replace(".", ",");
+
+    const rounded = money.toFixed(0);
+    const numLen = rounded.length;
+    for (let i = numLen - 3; i > 0; i -= 3) {
         formatted = `${formatted.slice(0, i)} ${formatted.slice(i)}`;
     }
+
     return `${formatted} ₽`;
 }
 
 function createAddress(address) {
-    const parts = [];
-    if (address.regionName) parts.push(fmt("regionName"));
-    if (address.city)       parts.push(fmt("city"));
-    if (address.street)     parts.push(fmt("street"));
-    if (address.house)      parts.push(fmt("house"));
-    return parts.join(", ");
+    const addressToRender = [];
+    if (address.regionName) {
+        addressToRender.push(createAddressItem("regionName"));
+    }
+    if (address.city) {
+        addressToRender.push(createAddressItem("city"));
+    }
+    if (address.street) {
+        addressToRender.push(createAddressItem("street"));
+    }
+    if (address.house) {
+        addressToRender.push(createAddressItem("house"));
+    }
 
-    function fmt(key) {
+    return addressToRender.join(", ");
+
+    function createAddressItem(key) {
         return `${address[key].topoShortName}. ${address[key].topoValue}`;
     }
 }
