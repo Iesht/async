@@ -5,28 +5,24 @@ const API = {
     buhForms: "/api3/buh",
 };
 
-function sendRequest(url) {
-    return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("GET", url, true);
+async function sendRequest(url) {
+    try {
+        const response = await fetch(url);
 
-        xhr.onreadystatechange = function () {
-            if (xhr.readyState === XMLHttpRequest.DONE) {
-                if (xhr.status === 200) {
-                    resolve(JSON.parse(xhr.response));
-                } else {
-                    reject(new Error(`Ошибка при реквесте ${url} со статусом ${xhr.status}`));
-                }
-            }
-        };
+        if (!response.ok) {
+            throw new Error(`Ошибка при реквесте ${url} со статусом ${response.status}`);
+        }
 
-        xhr.onerror = function () {
-            reject(new Error(`Ошибка сети при реквесте ${url}`));
-        };
-
-        xhr.send();
-    });
+        return await response.json();
+    } catch (err) {
+        if (err.message.startsWith('Ошибка при реквесте')) {
+            throw err;
+        } else {
+            throw new Error(`Ошибка сети при реквесте ${url}`);
+        }
+    }
 }
+
 
 async function run() {
     try {
@@ -100,7 +96,7 @@ function renderOrganization(orgInfo, template, container) {
                 orgInfo.buhForms[orgInfo.buhForms.length - 1].form2[0] &&
                 orgInfo.buhForms[orgInfo.buhForms.length - 1].form2[0]
                     .endValue) ||
-                0
+            0
         );
     } else {
         money.textContent = "—";
