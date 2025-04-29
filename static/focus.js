@@ -1,52 +1,49 @@
 const API = {
     organizationList: "/orgsList",
-    analytics: "/api3/analytics",
+    analytics: "/api3/analitics",
     orgReqs: "/api3/reqBase",
     buhForms: "/api3/buh",
 };
 
-async function sendRequest(url) {
+async function fetchWithCheck(url) {
     try {
         const response = await fetch(url);
+        console.log("Fetch response for", url, response);
 
         if (!response.ok) {
-            throw new Error(`Ошибка при реквесте ${url} со статусом ${response.status}`);
+            alert(`Ошибка запроса ${url}: ${response.status} ${response.statusText}`);
+            return null;
         }
 
         return await response.json();
     } catch (err) {
-        if (err.message.startsWith('Ошибка при реквесте')) {
-            throw err;
-        } else {
-            throw new Error(`Ошибка сети при реквесте ${url}`);
-        }
+        alert(`Ошибка сети при реквесте ${url}`);
+        return null;
     }
 }
 
-
 async function run() {
-    try {
-        const orgOgrns = await sendRequest(API.organizationList);
-        const ogrns = orgOgrns.join(",");
+    const orgOgrns = await fetchWithCheck(API.organizationList);
+    if (!orgOgrns) return;
 
-        const [requisites, analytics, buh] = await Promise.all([
-            sendRequest(`${API.orgReqs}?ogrn=${ogrns}`),
-            sendRequest(`${API.analytics}?ogrn=${ogrns}`),
-            sendRequest(`${API.buhForms}?ogrn=${ogrns}`)
-        ]);
+    const ogrns = orgOgrns.join(",");
 
-        const orgsMap = reqsToMap(requisites);
-        addInOrgsMap(orgsMap, analytics, "analytics");
-        addInOrgsMap(orgsMap, buh, "buhForms");
+    const requisites = await fetchWithCheck(`${API.orgReqs}?ogrn=${ogrns}`);
+    if (!requisites) return;
 
-        render(orgsMap, orgOgrns);
-    } catch (error) {
-        console.error("Ошибка при фетче:", error);
-    }
+    const analytics = await fetchWithCheck(`${API.analytics}?ogrn=${ogrns}`);
+    if (!analytics) return;
+
+    const buh = await fetchWithCheck(`${API.buhForms}?ogrn=${ogrns}`);
+    if (!buh) return;
+
+    const orgsMap = reqsToMap(requisites);
+    addInOrgsMap(orgsMap, analytics, "analytics");
+    addInOrgsMap(orgsMap, buh, "buhForms");
+    render(orgsMap, orgOgrns);
 }
 
 run();
-
 
 function reqsToMap(requisites) {
     return requisites.reduce((acc, item) => {
@@ -57,7 +54,9 @@ function reqsToMap(requisites) {
 
 function addInOrgsMap(orgsMap, additionalInfo, key) {
     for (const item of additionalInfo) {
-        orgsMap[item.ogrn][key] = item[key];
+        if (orgsMap[item.ogrn]) {
+            orgsMap[item.ogrn][key] = item[key];
+        }
     }
 }
 
@@ -68,77 +67,56 @@ function render(organizationsInfo, organizationsOrder) {
     const template = document.getElementById("orgTemplate");
     const container = table.querySelector("tbody");
 
-    organizationsOrder.forEach((item) => {
-        renderOrganization(organizationsInfo[item], template, container);
+    organizationsOrder.forEach((ogrn) => {
+        renderOrganization(organizationsInfo[ogrn], template, container);
     });
 }
 
 function renderOrganization(orgInfo, template, container) {
     const clone = document.importNode(template.content, true);
-    const name = clone.querySelector(".name");
-    const indebtedness = clone.querySelector(".indebtedness");
-    const money = clone.querySelector(".money");
-    const address = clone.querySelector(".address");
+    const nameEl = clone.querySelector(".name");
+    const indebtednessEl = clone.querySelector(".indebtedness");
+    const moneyEl = clone.querySelector(".money");
+    const addressEl = clone.querySelector(".address");
 
-    name.textContent =
-        (orgInfo.UL && orgInfo.UL.legalName && orgInfo.UL.legalName.short) ||
-        "";
-    indebtedness.textContent = formatMoney(orgInfo.analytics.s1002 || 0);
+    nameEl.textContent =
+        (orgInfo.UL && orgInfo.UL.legalName && orgInfo.UL.legalName.short) || "";
 
-    if (
-        orgInfo.buhForms &&
-        orgInfo.buhForms.length &&
-        orgInfo.buhForms[orgInfo.buhForms.length - 1] &&
-        orgInfo.buhForms[orgInfo.buhForms.length - 1].year === 2017
-    ) {
-        money.textContent = formatMoney(
-            (orgInfo.buhForms[orgInfo.buhForms.length - 1].form2 &&
-                orgInfo.buhForms[orgInfo.buhForms.length - 1].form2[0] &&
-                orgInfo.buhForms[orgInfo.buhForms.length - 1].form2[0]
-                    .endValue) ||
-            0
+    indebtednessEl.textContent = formatMoney(orgInfo.analytics?.s1002 || 0);
+
+    const forms = orgInfo.buhForms || [];
+    const lastForm = forms[forms.length - 1];
+    if (lastForm?.year === 2017) {
+        moneyEl.textContent = formatMoney(
+            lastForm.form2?.[0]?.endValue || 0
         );
     } else {
-        money.textContent = "—";
+        moneyEl.textContent = "—";
     }
 
-    const addressFromServer = orgInfo.UL.legalAddress.parsedAddressRF;
-    address.textContent = createAddress(addressFromServer);
-
+    const addr = orgInfo.UL?.legalAddress?.parsedAddressRF;
+    addressEl.textContent = addr ? createAddress(addr) : "";
     container.appendChild(clone);
 }
 
 function formatMoney(money) {
-    let formatted = money.toFixed(2);
-    formatted = formatted.replace(".", ",");
-
-    const rounded = money.toFixed(0);
-    const numLen = rounded.length;
-    for (let i = numLen - 3; i > 0; i -= 3) {
+    let formatted = money.toFixed(2).replace(".", ",");
+    const rounded = Math.floor(money).toString();
+    for (let i = rounded.length - 3; i > 0; i -= 3) {
         formatted = `${formatted.slice(0, i)} ${formatted.slice(i)}`;
     }
-
     return `${formatted} ₽`;
 }
 
 function createAddress(address) {
-    const addressToRender = [];
-    if (address.regionName) {
-        addressToRender.push(createAddressItem("regionName"));
-    }
-    if (address.city) {
-        addressToRender.push(createAddressItem("city"));
-    }
-    if (address.street) {
-        addressToRender.push(createAddressItem("street"));
-    }
-    if (address.house) {
-        addressToRender.push(createAddressItem("house"));
-    }
+    const parts = [];
+    if (address.regionName) parts.push(fmt("regionName"));
+    if (address.city)       parts.push(fmt("city"));
+    if (address.street)     parts.push(fmt("street"));
+    if (address.house)      parts.push(fmt("house"));
+    return parts.join(", ");
 
-    return addressToRender.join(", ");
-
-    function createAddressItem(key) {
+    function fmt(key) {
         return `${address[key].topoShortName}. ${address[key].topoValue}`;
     }
 }
